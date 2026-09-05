@@ -1,1 +1,71 @@
+name: PR checks
 
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  # The merge gate. Pattern matches only, so nothing written in the diff can
+  # argue with the result. Skipped when the override-checks label is present,
+  # which leaves a record of the decision on the PR itself.
+  diff-checks:
+    name: Deterministic diff checks
+    runs-on: ubuntu-latest
+    if: ${{ !contains(github.event.pull_request.labels.*.name, 'override-checks') }}
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run checks
+        run: |
+          chmod +x .github/scripts/check-diff.sh
+          .github/scripts/check-diff.sh origin/${{ github.base_ref }}
+
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/coaching_app_test
+      RAILS_ENV: test
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ruby/setup-ruby@v1
+        with:
+          bundler-cache: true
+
+      - name: Prepare database
+        run: bin/rails db:prepare
+
+      - name: Run tests
+        run: bin/rails test
+
+  lint:
+    name: Lint and scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ruby/setup-ruby@v1
+        with:
+          bundler-cache: true
+
+      - name: Brakeman
+        run: bin/brakeman --no-pager
+
+      - name: RuboCop
+        run: bin/rubocop -f github
